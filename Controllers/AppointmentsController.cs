@@ -1,8 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
-using ConsoleApp1.DTOs;
+using App.DTOs;
 
-namespace ConsoleApp1.Controllers;
+namespace App.Controllers;
 
 [Route("api/[controller]")] 
 [ApiController]

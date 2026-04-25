@@ -1,4 +1,4 @@
-﻿namespace ConsoleApp1.DTOs;
+﻿namespace App.DTOs;
 
 public class AppointmentListDto
 {
