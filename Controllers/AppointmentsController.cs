@@ -19,6 +19,7 @@ public class AppointmentsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAppointments([FromQuery] string? status, [FromQuery] string? patientLastName)
     {
+        
         try
         {
             var appointments = new List<AppointmentListDto>();
@@ -70,32 +71,43 @@ public class AppointmentsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> AddAppointment([FromBody] CreateAppointmentRequestDto request)
     {
-        try
-        {
             await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
             
-            const string sql = @"INSERT INTO dbo.Appointments (IdPatient, IdDoctor, AppointmentDate, Status, Reason)
+            if (request.AppointmentDate < DateTime.Now)
+            {
+                return BadRequest("Appointment date cannot be in the past.");
+            }
+            try
+            {
+
+                const string sql = @"INSERT INTO dbo.Appointments (IdPatient, IdDoctor, AppointmentDate, Status, Reason)
                 OUTPUT INSERTED.IdAppointment
                 VALUES (@IdPatient, @IdDoctor, @Date, 'Scheduled', @Reason)";
-            
-            await using var command = new SqlCommand(sql, connection);
-            command.Parameters.AddWithValue("@IdPatient", request.IdPatient);
-            command.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
-            command.Parameters.AddWithValue("@Date", request.AppointmentDate);
-            command.Parameters.AddWithValue("@Reason", request.Reason);
-            
-            await connection.OpenAsync();
-            var newId = (int)await command.ExecuteScalarAsync();
-            
-            return CreatedAtAction(nameof(GetAppointments), new { Id = newId }, request);
-        }
-        catch (SqlException ex)
-        {
-            return BadRequest(new { Message = "Database Error", Details = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, ex.Message);
-        }
+
+                await using var command = new SqlCommand(sql, connection, (SqlTransaction)transaction);
+                command.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+                command.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                command.Parameters.AddWithValue("@Date", request.AppointmentDate);
+                command.Parameters.AddWithValue("@Reason", request.Reason);
+
+                var newId = (int)await command.ExecuteScalarAsync();
+
+                const string sqlPatientUpdate = @"UPDATE dbo.Patients SET LastName = LastName WHERE IdPatient = @IdPatient";
+                
+                await using var commandPatient = new SqlCommand(sqlPatientUpdate, connection, (SqlTransaction)transaction);
+                commandPatient.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+                await commandPatient.ExecuteNonQueryAsync();
+
+                await transaction.CommitAsync();
+
+                return CreatedAtAction(nameof(GetAppointments), new { Id = newId }, request);
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(500, $"Executed rollback: {ex.Message }");
+            }
     }
 }
