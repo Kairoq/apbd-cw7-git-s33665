@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using System.Transactions;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using App.DTOs;
 
@@ -109,5 +110,33 @@ public class AppointmentsController : ControllerBase
                 await transaction.RollbackAsync();
                 return StatusCode(500, $"Executed rollback: {ex.Message }");
             }
+        
     }
+    
+        [HttpDelete("{id:int}")]
+        public async Task<IActionResult> DeleteAppointment(int id)
+        {
+            try
+            {
+                await using var connection = new SqlConnection(_connectionString);
+                const string sql = @"DELETE FROM dbo.Appointments WHERE IdAppointment = @Id";
+                
+                await using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@Id", id);
+                
+                await connection.OpenAsync();
+                var rowsAffected = await command.ExecuteNonQueryAsync();
+
+                if (rowsAffected == 0)
+                {
+                    return NotFound($"Appointment Id {id} not found");
+                }
+                
+                return Ok(new {message = $"Successfully deleted appointment {id}"});
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
 }
