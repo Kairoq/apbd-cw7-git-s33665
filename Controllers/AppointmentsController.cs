@@ -1,5 +1,4 @@
-﻿using System.Transactions;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using App.DTOs;
 
@@ -76,12 +75,13 @@ public class AppointmentsController : ControllerBase
         {
             await using var connection = new SqlConnection(_connectionString);
             const string sql = @"
-                SELECT a.IdAppointment, a.AppointmentDate, a.Status, a.Reason,
-                       p.Email, p.PhoneNumber, d.LicenseNumber
-                FROM dbo.Appointments a
-                JOIN dbo.Patients p ON a.IdPatient = p.IdPatient
-                JOIN dbo.Doctors d ON a.IdDoctor = d.IdDoctor
-                WHERE a.IdAppointment = @Id";
+            SELECT a.IdAppointment, a.AppointmentDate, a.Status, a.Reason, a.InternalNotes,
+                   p.Email AS PatientEmail, p.PhoneNumber AS PatientPhone, 
+                   d.LicenseNumber AS DoctorLicenseNumber
+            FROM dbo.Appointments a
+            JOIN dbo.Patients p ON a.IdPatient = p.IdPatient
+            JOIN dbo.Doctors d ON a.IdDoctor = d.IdDoctor
+            WHERE a.IdAppointment = @Id";
 
             await using var command = new SqlCommand(sql, connection);
             command.Parameters.AddWithValue("@Id", id);
@@ -91,13 +91,15 @@ public class AppointmentsController : ControllerBase
 
             if (!await reader.ReadAsync()) return NotFound($"Appointment {id} not found.");
 
-            return Ok(new AppointmentListDto {
+            return Ok(new AppointmentDetailsDto {
                 IdAppointment = (int)reader["IdAppointment"],
                 AppointmentDate = (DateTime)reader["AppointmentDate"],
                 Status = (string)reader["Status"],
                 Reason = (string)reader["Reason"],
+                InternalNotes = reader["InternalNotes"] == DBNull.Value ? null : (string)reader["InternalNotes"],
                 PatientEmail = (string)reader["PatientEmail"],
-
+                PatientPhone = (string)reader["PatientPhone"],
+                DoctorLicenseNumber = (string)reader["DoctorLicenseNumber"]
             });
         }
         catch (Exception ex) { return StatusCode(500, ex.Message); }
@@ -161,30 +163,30 @@ public async Task<IActionResult> AddAppointment([FromBody] CreateAppointmentRequ
     }
 }
     
-        [HttpDelete("{id:int}")]
-        public async Task<IActionResult> DeleteAppointment(int id)
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> DeleteAppointment(int id)
+    {
+        try
         {
-            try
-            {
-                await using var connection = new SqlConnection(_connectionString);
-                const string sql = @"DELETE FROM dbo.Appointments WHERE IdAppointment = @Id";
-                
-                await using var command = new SqlCommand(sql, connection);
-                command.Parameters.AddWithValue("@Id", id);
-                
-                await connection.OpenAsync();
-                var rowsAffected = await command.ExecuteNonQueryAsync();
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
 
-                if (rowsAffected == 0)
-                {
-                    return NotFound($"Appointment Id {id} not found");
-                }
-                
-                return Ok(new {message = $"Successfully deleted appointment {id}"});
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
+            const string checkSql = "SELECT Status FROM dbo.Appointments WHERE IdAppointment = @Id";
+            await using var checkCmd = new SqlCommand(checkSql, connection);
+            checkCmd.Parameters.AddWithValue("@Id", id);
+        
+            var status = await checkCmd.ExecuteScalarAsync() as string;
+
+            if (status == null) return NotFound();
+            if (status == "Completed") return Conflict("Cannot delete a completed appointment.");
+
+            const string deleteSql = "DELETE FROM dbo.Appointments WHERE IdAppointment = @Id";
+            await using var deleteCmd = new SqlCommand(deleteSql, connection);
+            deleteCmd.Parameters.AddWithValue("@Id", id);
+            await deleteCmd.ExecuteNonQueryAsync();
+
+            return NoContent();
         }
+        catch (Exception ex) { return StatusCode(500, ex.Message); }
+    }
 }
