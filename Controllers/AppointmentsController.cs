@@ -162,7 +162,76 @@ public async Task<IActionResult> AddAppointment([FromBody] CreateAppointmentRequ
         return StatusCode(500, ex.Message);
     }
 }
+
+[HttpPut("{idAppointment:int}")]
+public async Task<IActionResult> UpdateAppointment(int idAppointment, [FromBody] UpdateAppointmentRequestDto request)
+{
+    var Statuses = new[] { "Scheduled", "Completed", "Cancelled" };
+    if (!Statuses.Contains(request.Status)) return BadRequest("Invalid status name");
     
+    await using var connection = new SqlConnection(_connectionString);
+    await connection.OpenAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
+    try
+    {
+        const string getSql = "SELECT Status, AppointmentDate FROM dbo.Appointments WHERE IdAppointment = @Id";
+        await using var command = new SqlCommand(getSql, connection, (SqlTransaction)transaction);
+        command.Parameters.AddWithValue("@Id", idAppointment);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync()) return NotFound("Appointment not found.");
+
+        string currentStatus = reader.GetString(0); 
+        DateTime currentDate = reader.GetDateTime(1);
+        await reader.CloseAsync();
+
+        if (currentStatus == "Completed" && currentDate != request.AppointmentDate)
+        {
+            return Conflict("Cannot change the date of a completed appointment.");
+        }
+
+        if (currentDate != request.AppointmentDate)
+        {
+            const string conflictSql = @"SELECT COUNT(*) FROM dbo.Appointments 
+                                        WHERE IdDoctor = @IdD AND AppointmentDate = @Date 
+                                        AND IdAppointment != @Id AND Status = 'Scheduled'";
+            await using var conflict = new SqlCommand(conflictSql, connection, (SqlTransaction)transaction);
+            conflict.Parameters.AddWithValue("@IdD", request.IdDoctor);
+            conflict.Parameters.AddWithValue("@Date", request.AppointmentDate);
+            conflict.Parameters.AddWithValue("@Id", idAppointment);
+
+            if ((int)await conflict.ExecuteScalarAsync() > 0)
+                return Conflict("Doctor already has an appointment at this time.");
+        }
+
+        const string updateSql = @"UPDATE dbo.Appointments 
+                              SET IdPatient = @IdP, IdDoctor = @IdD, AppointmentDate = @Date, 
+                                  Status = @Status, Reason = @Reason, InternalNotes = @Notes
+                              WHERE IdAppointment = @Id";
+
+        await using var updateCommand = new SqlCommand(updateSql, connection, (SqlTransaction)transaction);
+        updateCommand.Parameters.AddWithValue("@IdP", request.IdPatient);
+        updateCommand.Parameters.AddWithValue("@IdD", request.IdDoctor);
+        updateCommand.Parameters.AddWithValue("@Date", request.AppointmentDate);
+        updateCommand.Parameters.AddWithValue("@Status", request.Status);
+        updateCommand.Parameters.AddWithValue("@Reason", request.Reason);
+        updateCommand.Parameters.AddWithValue("@Notes", (object?)request.InternalNotes ?? DBNull.Value);
+        updateCommand.Parameters.AddWithValue("@Id", idAppointment);
+
+        await updateCommand.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+
+        return Ok();
+    }
+    catch (Exception ex)
+    {
+        await transaction.RollbackAsync();
+        return StatusCode(500, ex.Message);
+    }
+}
+
+
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> DeleteAppointment(int id)
     {
